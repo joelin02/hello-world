@@ -12,8 +12,8 @@
       <h1>Stock Data Visualizer</h1>
       <p class="subtitle">
         Load a CSV file where the first column is a date and the second column is a stock price.
-        The data renders as an interactive line chart — hover anywhere on the chart to see the
-        exact date and price at that point.
+        The data renders as an interactive line chart — hover to see a point, or click and drag
+        to compare the change between two dates.
       </p>
     </header>
 
@@ -31,9 +31,12 @@
     </div>
 
     <div class="chart-card">
-      <div class="hover-readout hidden invisible" id="hover-readout">
-        <span id="hover-price"></span>
-        <span id="hover-date"></span>
+      <div class="readout hidden" id="readout">
+        <div class="readout-top">
+          <span class="readout-price" id="readout-price"></span>
+          <span class="readout-change" id="readout-change"></span>
+        </div>
+        <div class="readout-date" id="readout-date"></div>
       </div>
       <div class="chart-empty" id="chart-empty">Upload a CSV to see the chart</div>
       <svg class="chart hidden" id="chart"></svg>
