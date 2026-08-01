@@ -1,0 +1,188 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+  color: #202124;
+  font-family: "Google Sans", Roboto, Arial, sans-serif;
+}
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 40px 24px 64px;
+}
+
+.header h1 {
+  font-size: 28px;
+  font-weight: 500;
+  margin: 0 0 12px;
+}
+
+.subtitle {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #5f6368;
+  max-width: 640px;
+  margin: 0 0 28px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.file-upload input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.file-upload span#file-label {
+  display: inline-block;
+  padding: 8px 20px;
+  border-radius: 4px;
+  background: #1a73e8;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+}
+
+.file-upload span#file-label:hover {
+  background: #1765cc;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.toggle-track {
+  width: 34px;
+  height: 14px;
+  border-radius: 999px;
+  background: #dadce0;
+  position: relative;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.4);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.toggle input:checked + .toggle-track {
+  background: #a8c7fa;
+}
+
+.toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(14px);
+  background: #1a73e8;
+}
+
+.toggle-text {
+  font-size: 14px;
+  color: #202124;
+}
+
+.chart-card {
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  padding: 16px 8px 8px;
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.15);
+  position: relative;
+}
+
+.chart-empty {
+  height: 460px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #80868b;
+  font-size: 14px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.invisible {
+  visibility: hidden;
+}
+
+.hover-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0 12px 12px;
+  min-height: 28px;
+}
+
+#hover-price {
+  font-size: 22px;
+  font-weight: 500;
+  color: #202124;
+}
+
+#hover-date {
+  font-size: 13px;
+  color: #5f6368;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+}
+
+.axis text {
+  fill: #5f6368;
+  font-size: 11px;
+}
+
+.axis .domain {
+  stroke: #dadce0;
+}
+
+.axis .tick line {
+  stroke: #dadce0;
+}
+
+.grid .tick line {
+  stroke: #edf0f2;
+}
+
+.grid .domain {
+  display: none;
+}
+
+.overlay {
+  cursor: crosshair;
+}

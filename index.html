@@ -2,16 +2,45 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Hello World</title>
-  <style>
-    body {
-      background-color: lightblue;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stock Data Visualizer</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Hello, World!</h1>
-  <p>created by joelin02</p>
-  <img src="https://apod.nasa.gov/apod/image/2603/rapa_nui_milky_way.jpeg" alt="Rapa Nui Milky Way">
+  <div class="page">
+    <header class="header">
+      <h1>Stock Data Visualizer</h1>
+      <p class="subtitle">
+        Load a CSV file where the first column is a date and the second column is a stock price.
+        The data renders as an interactive line chart — hover anywhere on the chart to see the
+        exact date and price at that point.
+      </p>
+    </header>
+
+    <div class="controls">
+      <label class="file-upload">
+        <input type="file" id="csv-input" accept=".csv,text/csv">
+        <span id="file-label">Choose CSV file</span>
+      </label>
+
+      <label class="toggle">
+        <input type="checkbox" id="log-toggle">
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        <span class="toggle-text">Log scale</span>
+      </label>
+    </div>
+
+    <div class="chart-card">
+      <div class="hover-readout hidden invisible" id="hover-readout">
+        <span id="hover-price"></span>
+        <span id="hover-date"></span>
+      </div>
+      <div class="chart-empty" id="chart-empty">Upload a CSV to see the chart</div>
+      <svg class="chart hidden" id="chart"></svg>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>
