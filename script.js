@@ -16,11 +16,15 @@
   const fileInput = document.getElementById('csv-input');
   const fileLabel = document.getElementById('file-label');
   const logToggle = document.getElementById('log-toggle');
+  const startDateInput = document.getElementById('start-date');
+  const endDateInput = document.getElementById('end-date');
 
-  const margin = { top: 16, right: 20, bottom: 32, left: 72 };
-  const height = 460;
+  const margin = { top: 16, right: 20, bottom: 32, left: 92 };
+  const height = 920;
+  const emptyStateDefaultText = emptyState.textContent;
 
-  let data = [];
+  let allData = []; // full parsed CSV, unfiltered
+  let data = []; // date-range-filtered subset actually rendered
   let useLog = false;
   let selection = null; // {start, end} data indices, sticky until a plain click clears it
 
@@ -36,12 +40,18 @@
         alert('No valid date/price rows found in that CSV.');
         return;
       }
-      data = parsed;
-      selection = null;
-      emptyState.classList.add('hidden');
-      svg.classed('hidden', false);
-      readout.classList.remove('hidden');
-      render();
+      allData = parsed;
+
+      const [minDate, maxDate] = d3.extent(parsed, (d) => d.date);
+      const toInputValue = d3.timeFormat('%Y-%m-%d');
+      startDateInput.min = toInputValue(minDate);
+      startDateInput.max = toInputValue(maxDate);
+      endDateInput.min = toInputValue(minDate);
+      endDateInput.max = toInputValue(maxDate);
+      startDateInput.value = '';
+      endDateInput.value = '';
+
+      applyDateFilter();
     };
     reader.readAsText(file);
   });
@@ -51,9 +61,40 @@
     if (data.length) render();
   });
 
+  startDateInput.addEventListener('change', applyDateFilter);
+  endDateInput.addEventListener('change', applyDateFilter);
+
   window.addEventListener('resize', () => {
     if (data.length) render();
   });
+
+  function applyDateFilter() {
+    if (!allData.length) return;
+
+    const startBound = startDateInput.value ? parseFlexibleDate(startDateInput.value) : null;
+    const endBound = endDateInput.value ? parseFlexibleDate(endDateInput.value) : null;
+
+    data = allData.filter((d) => {
+      if (startBound && d.date < startBound) return false;
+      if (endBound && d.date > endBound) return false;
+      return true;
+    });
+    selection = null;
+
+    if (!data.length) {
+      svg.classed('hidden', true);
+      readout.classList.add('hidden');
+      emptyState.textContent = 'No data in the selected date range.';
+      emptyState.classList.remove('hidden');
+      return;
+    }
+
+    emptyState.classList.add('hidden');
+    emptyState.textContent = emptyStateDefaultText;
+    svg.classed('hidden', false);
+    readout.classList.remove('hidden');
+    render();
+  }
 
   function parseCSV(text) {
     const lines = text.split(/\r\n|\n|\r/).map((line) => line.trim()).filter(Boolean);
