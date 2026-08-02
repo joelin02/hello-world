@@ -12,6 +12,7 @@
   const readout = document.getElementById('readout');
   const readoutPrice = document.getElementById('readout-price');
   const readoutChange = document.getElementById('readout-change');
+  const readoutCagr = document.getElementById('readout-cagr');
   const readoutDate = document.getElementById('readout-date');
   const fileInput = document.getElementById('csv-input');
   const fileLabel = document.getElementById('file-label');
@@ -348,6 +349,7 @@
       readoutPrice.textContent = formatPrice(endD.price);
       readoutChange.textContent = `${up ? '▲' : '▼'} ${formatSignedPrice(delta)} (${formatSignedPct(pct)})`;
       readoutChange.className = `readout-change ${up ? 'up' : 'down'}`;
+      readoutCagr.textContent = formatCagr(calculateCagr(startD, endD));
       readoutDate.textContent = `${formatFullDate(startD.date)} – ${formatFullDate(endD.date)}`;
     }
 
@@ -358,6 +360,7 @@
       readoutPrice.textContent = formatPrice(d.price);
       readoutChange.textContent = `${up ? '▲' : '▼'} ${formatSignedPrice(delta)} (${formatSignedPct(pct)})`;
       readoutChange.className = `readout-change ${up ? 'up' : 'down'}`;
+      readoutCagr.textContent = formatCagr(calculateCagr(first, d));
       readoutDate.textContent = formatFullDate(d.date);
     }
 
@@ -477,5 +480,19 @@
   function formatSignedPct(pct) {
     const sign = pct >= 0 ? '+' : '−';
     return `${sign}${Math.abs(pct).toFixed(2)}%`;
+  }
+
+  // Compound annual growth rate between two points, annualizing whatever
+  // time span is currently displayed (full range, hover reference, or drag selection).
+  function calculateCagr(startD, endD) {
+    const msPerYear = 365.25 * 24 * 60 * 60 * 1000;
+    const years = (endD.date - startD.date) / msPerYear;
+    if (years <= 0 || startD.price <= 0) return null;
+    return Math.pow(endD.price / startD.price, 1 / years) - 1;
+  }
+
+  function formatCagr(cagr) {
+    if (cagr === null || !isFinite(cagr)) return '';
+    return `${(cagr * 100).toFixed(2)}% CAGR`;
   }
 })();

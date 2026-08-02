@@ -210,6 +210,11 @@ body {
   color: var(--down);
 }
 
+.readout-cagr {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
 .readout-date {
   font-size: 13px;
   color: var(--text-secondary);
