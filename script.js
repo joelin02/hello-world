@@ -49,8 +49,11 @@
       startDateInput.max = toInputValue(maxDate);
       endDateInput.min = toInputValue(minDate);
       endDateInput.max = toInputValue(maxDate);
-      startDateInput.value = '';
-      endDateInput.value = '';
+      startDateInput.value = toInputValue(minDate);
+      endDateInput.value = toInputValue(maxDate);
+
+      useLog = true;
+      logToggle.checked = true;
 
       applyDateFilter();
     };
