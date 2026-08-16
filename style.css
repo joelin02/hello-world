@@ -166,11 +166,6 @@ body {
      horizontal swipe here as a back/forward navigation gesture. */
   overflow: hidden;
   overscroll-behavior-x: none;
-  /* Stops iPadOS/mobile Safari from handling pinch and pan natively (which
-     zooms/scrolls the whole page) so our touch handlers get the gesture
-     instead. Scoped to this card only — pinch-zoom still works normally
-     everywhere else on the page. */
-  touch-action: none;
 }
 
 .chart-empty {
@@ -290,4 +285,10 @@ body {
 
 .overlay {
   cursor: crosshair;
+  /* Stops iPadOS/mobile Safari from handling pinch/pan natively (which would
+     zoom or scroll the whole page) so our touch handlers get the gesture
+     instead. Scoped to just the plot area (not the whole chart card) so a
+     one-finger flick over the margins — e.g. the Y-axis labels — still
+     scrolls the page normally. */
+  touch-action: none;
 }

@@ -8,6 +8,16 @@
 
   const svg = d3.select('#chart');
   const chartCard = document.querySelector('.chart-card');
+  // Created once and never removed by render(), unlike the rest of the
+  // chart's SVG content. iOS Safari cancels an in-progress touch sequence
+  // (fires touchcancel) if the element it's targeting is removed from the
+  // DOM — since every pinch/pan step calls render(), a naive
+  // svg.selectAll('*').remove() would nuke the very overlay a gesture is
+  // touching, killing the gesture after its first update. render() instead
+  // clears only the rebuildable content (the 'g' and 'defs') and leaves
+  // this alone, just repositioning it and raising it back on top each time.
+  const overlay = svg.append('rect').attr('class', 'overlay').attr('fill', 'transparent');
+  const overlayNode = overlay.node();
   const emptyState = document.getElementById('chart-empty');
   const readout = document.getElementById('readout');
   const readoutPrice = document.getElementById('readout-price');
@@ -368,7 +378,8 @@
     if (innerWidth <= 0) return;
 
     svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', width).attr('height', height);
-    svg.selectAll('*').remove();
+    // Only the rebuildable content — not the persistent overlay (see top).
+    svg.selectAll('g, defs').remove();
 
     const xScale = d3.scaleTime()
       .domain(d3.extent(data, (d) => d.date))
@@ -599,15 +610,16 @@
       readoutDate.textContent = `${formatFullDate(first.date)} – ${formatFullDate(last.date)}`;
     }
 
-    const overlay = svg.append('rect')
-      .attr('class', 'overlay')
+    // Persistent element (declared at module scope) — just reposition it to
+    // match this render's geometry and bring it back on top of the freshly
+    // rebuilt content underneath.
+    overlay
       .attr('x', margin.left)
       .attr('y', margin.top)
       .attr('width', innerWidth)
       .attr('height', innerHeight)
-      .attr('fill', 'transparent');
+      .raise();
 
-    const overlayNode = overlay.node();
     let isDragging = false;
     let dragMoved = false;
     let dragStartIndex = null;
