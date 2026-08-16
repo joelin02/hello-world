@@ -285,10 +285,13 @@ body {
 
 .overlay {
   cursor: crosshair;
-  /* Stops iPadOS/mobile Safari from handling pinch/pan natively (which would
-     zoom or scroll the whole page) so our touch handlers get the gesture
-     instead. Scoped to just the plot area (not the whole chart card) so a
-     one-finger flick over the margins — e.g. the Y-axis labels — still
-     scrolls the page normally. */
-  touch-action: none;
+  /* Stops iPadOS/mobile Safari from handling pinch and horizontal pan
+     natively (which would zoom or scroll the whole page) so our touch
+     handlers get those gestures instead. pan-y (not none) leaves vertical
+     panning available in principle — script.js decides per one-finger
+     gesture, based on its angle, whether to actually let a near-vertical
+     swipe fall through to native page scroll or keep it as a drag-select.
+     Scoped to just the plot area (not the whole chart card) so a flick over
+     the margins — e.g. the Y-axis labels — always scrolls normally. */
+  touch-action: pan-y;
 }

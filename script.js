@@ -687,15 +687,49 @@
       setReadoutDefault();
     });
 
-    // One-finger touch drag mirrors mouse click-and-drag range selection.
-    // Safe to key off render()'s local xScale/nearestIndex here (unlike the
-    // two-finger touch gestures above) because a plain drag never changes
-    // the date range mid-gesture, so this overlay instance stays alive for
-    // the whole drag instead of being torn down by a re-render.
+    // One-finger touch drag mirrors mouse click-and-drag range selection —
+    // except a near-vertical swipe is treated as an ordinary page scroll
+    // instead, so a one-finger flick still scrolls the page even when it
+    // starts over the chart. Direction is decided once, after a small
+    // deadzone (to avoid jitter deciding it prematurely on a barely-moving
+    // touch), then locked for the rest of the gesture — matching how native
+    // scroll views disambiguate a pan direction. Safe to key off render()'s
+    // local xScale/nearestIndex here (unlike the two-finger touch gestures
+    // above) because a plain drag never changes the date range mid-gesture,
+    // so this overlay instance stays alive for the whole drag instead of
+    // being torn down by a re-render.
+    const VERTICAL_SCROLL_MAX_ANGLE = 15; // degrees from true vertical — "almost perfectly vertical"
+    const DIRECTION_LOCK_DISTANCE = 8; // px of movement before committing to a direction
+
+    let touchStartX = null;
+    let touchStartY = null;
+    let touchDirectionLocked = false;
+
     function onWindowTouchMove(event) {
       if (event.touches.length !== 1) return;
+      const touch = event.touches[0];
+
+      if (!touchDirectionLocked) {
+        const dx = touch.clientX - touchStartX;
+        const dy = touch.clientY - touchStartY;
+        if (Math.hypot(dx, dy) < DIRECTION_LOCK_DISTANCE) return; // too little movement to tell yet
+        touchDirectionLocked = true;
+        const angleFromVertical = Math.atan2(Math.abs(dx), Math.abs(dy)) * (180 / Math.PI);
+        if (angleFromVertical <= VERTICAL_SCROLL_MAX_ANGLE) {
+          // Hand off to native scrolling: abandon the drag-select and stop
+          // intercepting the rest of this gesture. No preventDefault below
+          // this point is what actually lets the page scroll.
+          isDragging = false;
+          clearSelectionVisual();
+          window.removeEventListener('touchmove', onWindowTouchMove);
+          window.removeEventListener('touchend', onWindowTouchEnd);
+          window.removeEventListener('touchcancel', onWindowTouchEnd);
+          return;
+        }
+      }
+
       event.preventDefault();
-      const [tx] = d3.pointer(event.touches[0], overlayNode);
+      const [tx] = d3.pointer(touch, overlayNode);
       const idx = nearestIndex(clampX(tx));
       dragMoved = dragMoved || idx !== dragStartIndex;
       showSelection(dragStartIndex, idx);
@@ -725,8 +759,11 @@
 
     overlay.on('touchstart', (event) => {
       if (event.touches.length !== 1) return; // let chartCard's two-finger handler take pinch/pan
-      event.preventDefault();
-      const [tx] = d3.pointer(event.touches[0], overlayNode);
+      const touch = event.touches[0];
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+      touchDirectionLocked = false;
+      const [tx] = d3.pointer(touch, overlayNode);
       dragStartIndex = nearestIndex(clampX(tx));
       isDragging = true;
       dragMoved = false;
