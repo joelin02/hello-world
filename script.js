@@ -146,6 +146,13 @@
   }
 
   function endTouchGesture() {
+    // Flush a still-queued frame instead of dropping it — otherwise a quick
+    // gesture (fingers move, then lift, all inside one frame's budget) can
+    // have its final position silently discarded, since touchend would
+    // reset the state processTouchFrame checks before the frame ever runs.
+    if (touchFrameQueued) {
+      processTouchFrame();
+    }
     touchGestureActive = false;
     touchPrevDistance = null;
     touchPrevMidX = null;
@@ -154,7 +161,7 @@
 
   function processTouchFrame() {
     touchFrameQueued = false;
-    if (!touchGestureActive || !touchLatest) return;
+    if (!touchLatest) return;
     const distance = touchDistance(touchLatest[0], touchLatest[1]);
     const midX = touchMidX(touchLatest[0], touchLatest[1]);
 
@@ -192,6 +199,18 @@
 
   chartCard.addEventListener('touchend', endTouchGesture);
   chartCard.addEventListener('touchcancel', endTouchGesture);
+
+  // Safari (iPadOS) runs a separate native pinch-gesture recognizer
+  // alongside touch events, using its own non-standard gesturestart/change/
+  // end events. It engages as soon as two fingers touch down — regardless
+  // of whether they pinch or just pan together — and can take over the
+  // sequence after the first touchmove, which is why both pinch and pan
+  // appeared to update once and then stop. touch-action: none suppresses
+  // native scrolling but not this separate gesture system; preventDefault
+  // on these events is what actually tells Safari to leave it to us.
+  chartCard.addEventListener('gesturestart', (event) => event.preventDefault(), { passive: false });
+  chartCard.addEventListener('gesturechange', (event) => event.preventDefault(), { passive: false });
+  chartCard.addEventListener('gestureend', (event) => event.preventDefault(), { passive: false });
 
   // Date at a given screen x position at the time of the gesture, so zooming
   // keeps that point fixed on screen instead of always zooming toward the
