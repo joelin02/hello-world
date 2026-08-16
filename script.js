@@ -31,9 +31,45 @@
   const endDateInput = document.getElementById('end-date');
 
   const margin = { top: 16, right: 20, bottom: 32, left: 92 };
-  const height = 920;
   const emptyStateDefaultText = emptyState.textContent;
   const toInputValue = d3.timeFormat('%Y-%m-%d');
+
+  // Tablet-and-up (roughly iPad-portrait width or wider — 700px comfortably
+  // covers even iPad Mini's 744px) tries to fit the whole chart within one
+  // screen's worth of height, so scrolling to the chart card shows it in
+  // full without further scrolling. Bounded so it doesn't get unreadably
+  // short on a small/split-view window or absurdly tall on a huge monitor.
+  // Phones don't get this treatment — squeezing a dense chart into one
+  // phone screen isn't realistic — they get a smaller, fairly fixed height
+  // instead; label font-size is untouched either way (set in CSS, not
+  // scaled here), so text never shrinks below what's already legible.
+  const TABLET_BREAKPOINT = 700;
+  const TABLET_MIN_HEIGHT = 480;
+  const TABLET_MAX_HEIGHT = 1000;
+  const PHONE_MIN_HEIGHT = 360;
+  const PHONE_MAX_HEIGHT = 560;
+  // Rough estimate of the readout row's height (price/change/CAGR line plus
+  // the date line) — cheaper and more stable than measuring it live, since
+  // it's hidden (0 height) before a file is loaded.
+  const READOUT_HEIGHT_ESTIMATE = 68;
+  // chart-card's own vertical padding (16 + 8) and border (1 + 1), plus
+  // slack for the page's bottom padding/scrollbar/mobile browser toolbars
+  // so the card's bottom edge isn't flush against the viewport edge.
+  const CHART_CARD_CHROME = 26;
+  const BREATHING_ROOM = 56;
+
+  function computeChartHeight() {
+    const viewportHeight = window.innerHeight;
+    if (window.innerWidth < TABLET_BREAKPOINT) {
+      return Math.round(Math.max(PHONE_MIN_HEIGHT, Math.min(PHONE_MAX_HEIGHT, viewportHeight * 0.55)));
+    }
+    const overhead = READOUT_HEIGHT_ESTIMATE + CHART_CARD_CHROME + BREATHING_ROOM;
+    return Math.round(Math.max(TABLET_MIN_HEIGHT, Math.min(TABLET_MAX_HEIGHT, viewportHeight - overhead)));
+  }
+
+  function updateEmptyStateHeight() {
+    emptyState.style.height = computeChartHeight() + 'px';
+  }
 
   let allData = []; // full parsed CSV, unfiltered
   let data = []; // date-range-filtered subset actually rendered
@@ -102,8 +138,14 @@
   startDateInput.addEventListener('change', onDateInputChange);
   endDateInput.addEventListener('change', onDateInputChange);
 
+  updateEmptyStateHeight();
+
   window.addEventListener('resize', () => {
-    if (data.length) render();
+    if (data.length) {
+      render();
+    } else {
+      updateEmptyStateHeight();
+    }
   });
 
   // Trackpad pinch gestures (and ctrl+scroll) arrive as wheel events with
@@ -373,6 +415,7 @@
 
   function render() {
     const width = chartCard.clientWidth - 16;
+    const height = computeChartHeight();
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
     if (innerWidth <= 0) return;
@@ -414,15 +457,19 @@
       .attr('transform', `translate(0,${height - margin.bottom})`)
       .call(d3.axisBottom(xScale).ticks(tickCount).tickFormat(multiFormat).tickSizeOuter(0));
 
-    // Y axis (price, left-hand side like Google Finance)
+    // Y axis (price, left-hand side like Google Finance). Tick count scales
+    // with the available height (~1 per 45px) so a short/mobile chart gets
+    // fewer, less-crowded labels instead of the same fixed count squeezed
+    // into less space — label font-size itself never shrinks, only density.
+    const yTickCount = Math.max(3, Math.floor(innerHeight / 45));
     const yAxis = d3.axisLeft(yScale).tickFormat(d3.format(',.2f')).tickSizeOuter(0);
     if (useLog) {
       // Plain d3 log ticks collapse to bare powers of ten once the domain
       // spans multiple decades (e.g. 1M straight to 10M) — use finer,
       // adaptively-spaced values instead so the axis reads smoothly.
-      yAxis.tickValues(logTickValues(yScale.domain()));
+      yAxis.tickValues(logTickValues(yScale.domain(), yTickCount));
     } else {
-      yAxis.ticks(6);
+      yAxis.ticks(yTickCount);
     }
     g.append('g')
       .attr('class', 'axis y-axis')
@@ -787,22 +834,31 @@
   // Generates smoothly-graduated tick values for a log scale instead of only
   // bare powers of ten (e.g. 1M, 2M, 5M, 10M rather than a single 1M -> 10M
   // jump). Uses finer 1-9 steps within a decade, coarsening to 1/2/5 or 1/5
-  // once the domain spans many decades so the axis stays readable.
-  function logTickValues(domain) {
+  // once the domain spans many decades so the axis stays readable. Also
+  // steps down further, regardless of decade span, if that still wouldn't
+  // fit maxTicks — d3 renders exactly whatever tickValues() gives it with
+  // no overlap-avoidance of its own, so a short/mobile chart needs fewer
+  // candidates to begin with to avoid crowded, overlapping labels.
+  function logTickValues(domain, maxTicks) {
     const [lo, hi] = domain;
     if (!(lo > 0) || !(hi > lo)) return [];
     const decades = Math.log10(hi / lo);
-    const multiples = decades > 4 ? [1, 5] : decades > 1.5 ? [1, 2, 5] : [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const startTier = decades > 4 ? 2 : decades > 1.5 ? 1 : 0;
+    const tiers = [[1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 5], [1, 5], [1]];
     const startExp = Math.floor(Math.log10(lo));
     const endExp = Math.ceil(Math.log10(hi));
-    const ticks = [];
-    for (let exp = startExp; exp <= endExp; exp++) {
-      for (const m of multiples) {
-        const v = m * Math.pow(10, exp);
-        if (v >= lo && v <= hi) ticks.push(v);
+
+    for (let tier = startTier; tier < tiers.length; tier++) {
+      const ticks = [];
+      for (let exp = startExp; exp <= endExp; exp++) {
+        for (const m of tiers[tier]) {
+          const v = m * Math.pow(10, exp);
+          if (v >= lo && v <= hi) ticks.push(v);
+        }
       }
+      if (ticks.length <= maxTicks || tier === tiers.length - 1) return ticks;
     }
-    return ticks;
+    return [];
   }
 
   const formatMillisecond = d3.timeFormat('.%L');

@@ -169,7 +169,7 @@ body {
 }
 
 .chart-empty {
-  height: 920px;
+  height: 600px; /* fallback only — script.js sets the real responsive height inline */
   display: flex;
   align-items: center;
   justify-content: center;
