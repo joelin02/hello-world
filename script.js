@@ -23,11 +23,13 @@
   const margin = { top: 16, right: 20, bottom: 32, left: 92 };
   const height = 920;
   const emptyStateDefaultText = emptyState.textContent;
+  const toInputValue = d3.timeFormat('%Y-%m-%d');
 
   let allData = []; // full parsed CSV, unfiltered
   let data = []; // date-range-filtered subset actually rendered
   let useLog = false;
   let selection = null; // {start, end} data indices, sticky until a plain click clears it
+  let hoverDate = null; // last hovered/pinch-anchored date, redrawn as the crosshair on every render
 
   fileInput.addEventListener('change', (event) => {
     const file = event.target.files[0];
@@ -44,7 +46,6 @@
       allData = parsed;
 
       const [minDate, maxDate] = d3.extent(parsed, (d) => d.date);
-      const toInputValue = d3.timeFormat('%Y-%m-%d');
       startDateInput.min = toInputValue(minDate);
       startDateInput.max = toInputValue(maxDate);
       endDateInput.min = toInputValue(minDate);
@@ -54,6 +55,7 @@
 
       useLog = true;
       logToggle.checked = true;
+      hoverDate = null;
 
       applyDateFilter();
     };
@@ -71,6 +73,106 @@
   window.addEventListener('resize', () => {
     if (data.length) render();
   });
+
+  // Trackpad pinch gestures (and ctrl+scroll) arrive as wheel events with
+  // ctrlKey set — that's the browser convention, there's no dedicated pinch
+  // API. deltaY < 0 means fingers spreading apart (zoom in / narrower range),
+  // deltaY > 0 means pinching together (zoom out / wider range). A plain
+  // two-finger horizontal swipe (no ctrlKey, deltaX dominant) pans instead,
+  // like panning a zoomed photo in Preview. Applied directly per event (not
+  // batched via requestAnimationFrame) since rAF can stall in a
+  // backgrounded/unfocused tab and silently drop the gesture.
+  const PINCH_SENSITIVITY = 0.005;
+  const MIN_RANGE_MS = 24 * 60 * 60 * 1000;
+
+  chartCard.addEventListener('wheel', (event) => {
+    if (!allData.length) return;
+    if (event.ctrlKey) {
+      event.preventDefault();
+      applyPinchZoom(event);
+    } else if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      event.preventDefault();
+      applyPan(event.deltaX);
+    }
+  }, { passive: false });
+
+  // Date under the cursor at the time of the gesture, so zooming keeps that
+  // point fixed on screen instead of always zooming toward the center.
+  function cursorDateMs(event, curStart, curEnd) {
+    const rect = svg.node().getBoundingClientRect();
+    if (!rect.width) return null;
+    const innerLeft = rect.left + margin.left;
+    const innerRight = rect.left + rect.width - margin.right;
+    if (innerRight <= innerLeft) return null;
+    const fraction = (Math.min(Math.max(event.clientX, innerLeft), innerRight) - innerLeft) / (innerRight - innerLeft);
+    return curStart + fraction * (curEnd - curStart);
+  }
+
+  function currentRange() {
+    const [dataMin, dataMax] = d3.extent(allData, (d) => d.date);
+    const curStart = (startDateInput.value ? parseFlexibleDate(startDateInput.value) : dataMin).getTime();
+    const curEnd = (endDateInput.value ? parseFlexibleDate(endDateInput.value) : dataMax).getTime();
+    return { dataMin: dataMin.getTime(), dataMax: dataMax.getTime(), curStart, curEnd };
+  }
+
+  // Slide the window rather than clamping each end independently, so
+  // running into a data boundary doesn't skew the range off-center.
+  function clampRange(start, end, dataMin, dataMax) {
+    if (start < dataMin) {
+      end += dataMin - start;
+      start = dataMin;
+    }
+    if (end > dataMax) {
+      start -= end - dataMax;
+      end = dataMax;
+    }
+    return { start: Math.max(dataMin, start), end: Math.min(dataMax, end) };
+  }
+
+  function setRange(start, end) {
+    startDateInput.value = toInputValue(new Date(start));
+    endDateInput.value = toInputValue(new Date(end));
+    applyDateFilter();
+  }
+
+  function applyPinchZoom(event) {
+    // Clamp so one wild delta spike (some mice report huge steps) can't
+    // jump the range too far in a single event.
+    const clampedDelta = Math.max(-80, Math.min(80, event.deltaY));
+    const factor = Math.exp(clampedDelta * PINCH_SENSITIVITY);
+
+    const { dataMin, dataMax, curStart, curEnd } = currentRange();
+    const anchor = cursorDateMs(event, curStart, curEnd) ?? (curStart + curEnd) / 2;
+    const anchorFraction = (anchor - curStart) / (curEnd - curStart);
+
+    const fullRangeMs = dataMax - dataMin;
+    const newRangeMs = Math.min(fullRangeMs, Math.max(MIN_RANGE_MS, (curEnd - curStart) * factor));
+
+    // Keep the date under the cursor at the same fractional position within
+    // the new range as it was in the old one, so it stays visually fixed.
+    const newStart = anchor - anchorFraction * newRangeMs;
+    const newEnd = newStart + newRangeMs;
+
+    // Pin the crosshair to the anchor date so it stays visible through the
+    // re-render instead of only reappearing on the next real mousemove.
+    hoverDate = new Date(anchor);
+
+    const clamped = clampRange(newStart, newEnd, dataMin, dataMax);
+    setRange(clamped.start, clamped.end);
+  }
+
+  function applyPan(deltaX) {
+    const { dataMin, dataMax, curStart, curEnd } = currentRange();
+    const width = chartCard.clientWidth - 16;
+    const innerWidth = width - margin.left - margin.right;
+    if (innerWidth <= 0) return;
+
+    // 1:1 with pixels moved, so the chart tracks the swipe the way an image
+    // tracks your fingers when panning in Preview.
+    const shiftMs = deltaX * ((curEnd - curStart) / innerWidth);
+    const clamped = clampRange(curStart + shiftMs, curEnd + shiftMs, dataMin, dataMax);
+    setRange(clamped.start, clamped.end);
+  }
 
   function applyDateFilter() {
     if (!allData.length) return;
@@ -160,15 +262,19 @@
       .domain(d3.extent(data, (d) => d.date))
       .range([margin.left, width - margin.right]);
 
+    // Log scale skips .nice() on purpose: nice() rounds a log domain outward
+    // to the nearest power of ten, so a max that inches from 999,999 to
+    // 1,000,001 would snap the axis top from 1M to 10M. Proportional padding
+    // instead keeps the domain (and its ticks) shifting continuously as the
+    // visible min/max change while zooming/panning.
     const prices = data.map((d) => d.price);
     const yDomain = useLog
-      ? [d3.min(prices), d3.max(prices)]
+      ? [d3.min(prices) / 1.06, d3.max(prices) * 1.06]
       : [d3.min(prices) * 0.98, d3.max(prices) * 1.02];
 
-    const yScale = (useLog ? d3.scaleLog() : d3.scaleLinear())
-      .domain(yDomain)
-      .range([height - margin.bottom, margin.top])
-      .nice();
+    const yScale = useLog
+      ? d3.scaleLog().domain(yDomain).range([height - margin.bottom, margin.top])
+      : d3.scaleLinear().domain(yDomain).range([height - margin.bottom, margin.top]).nice();
 
     const tickCount = Math.max(2, Math.floor(innerWidth / 90));
     const g = svg.append('g');
@@ -186,10 +292,19 @@
       .call(d3.axisBottom(xScale).ticks(tickCount).tickFormat(multiFormat).tickSizeOuter(0));
 
     // Y axis (price, left-hand side like Google Finance)
+    const yAxis = d3.axisLeft(yScale).tickFormat(d3.format(',.2f')).tickSizeOuter(0);
+    if (useLog) {
+      // Plain d3 log ticks collapse to bare powers of ten once the domain
+      // spans multiple decades (e.g. 1M straight to 10M) — use finer,
+      // adaptively-spaced values instead so the axis reads smoothly.
+      yAxis.tickValues(logTickValues(yScale.domain()));
+    } else {
+      yAxis.ticks(6);
+    }
     g.append('g')
       .attr('class', 'axis y-axis')
       .attr('transform', `translate(${margin.left},0)`)
-      .call(d3.axisLeft(yScale).ticks(6, useLog ? '~s' : undefined).tickFormat(d3.format(',.2f')).tickSizeOuter(0));
+      .call(yAxis);
 
     const first = data[0];
     const last = data[data.length - 1];
@@ -403,6 +518,7 @@
       const endIndex = nearestIndex(clampX(mx));
       if (!dragMoved || endIndex === dragStartIndex) {
         selection = null;
+        hoverDate = null;
         clearSelectionVisual();
         setReadoutDefault();
       } else {
@@ -411,12 +527,20 @@
       }
     }
 
+    function showHoverPoint(d) {
+      focusLineV.attr('x1', xScale(d.date)).attr('x2', xScale(d.date)).style('opacity', 1);
+      focusLineH.attr('y1', yScale(d.price)).attr('y2', yScale(d.price)).style('opacity', 1);
+      focusCircle.attr('cx', xScale(d.date)).attr('cy', yScale(d.price)).attr('fill', trendColor).style('opacity', 1);
+      setReadoutForPoint(d);
+    }
+
     overlay.on('mousedown', (event) => {
       event.preventDefault();
       const [mx] = d3.pointer(event, overlayNode);
       dragStartIndex = nearestIndex(clampX(mx));
       isDragging = true;
       dragMoved = false;
+      hoverDate = null;
       window.addEventListener('mousemove', onWindowMouseMove);
       window.addEventListener('mouseup', onWindowMouseUp);
     });
@@ -426,14 +550,13 @@
       const [mx] = d3.pointer(event, overlayNode);
       const d = data[nearestIndex(clampX(mx))];
       if (!d) return;
-      focusLineV.attr('x1', xScale(d.date)).attr('x2', xScale(d.date)).style('opacity', 1);
-      focusLineH.attr('y1', yScale(d.price)).attr('y2', yScale(d.price)).style('opacity', 1);
-      focusCircle.attr('cx', xScale(d.date)).attr('cy', yScale(d.price)).attr('fill', trendColor).style('opacity', 1);
-      setReadoutForPoint(d);
+      hoverDate = d.date;
+      showHoverPoint(d);
     });
 
     overlay.on('mouseleave', () => {
       if (isDragging || selection) return;
+      hoverDate = null;
       focusLineV.style('opacity', 0);
       focusLineH.style('opacity', 0);
       focusCircle.style('opacity', 0);
@@ -442,9 +565,34 @@
 
     if (selection) {
       showSelection(selection.start, selection.end);
+    } else if (hoverDate) {
+      // Redraws the crosshair immediately on render (e.g. after a pinch-zoom
+      // step) instead of waiting for the next real mousemove.
+      showHoverPoint(data[nearestIndex(clampX(xScale(hoverDate)))]);
     } else {
       setReadoutDefault();
     }
+  }
+
+  // Generates smoothly-graduated tick values for a log scale instead of only
+  // bare powers of ten (e.g. 1M, 2M, 5M, 10M rather than a single 1M -> 10M
+  // jump). Uses finer 1-9 steps within a decade, coarsening to 1/2/5 or 1/5
+  // once the domain spans many decades so the axis stays readable.
+  function logTickValues(domain) {
+    const [lo, hi] = domain;
+    if (!(lo > 0) || !(hi > lo)) return [];
+    const decades = Math.log10(hi / lo);
+    const multiples = decades > 4 ? [1, 5] : decades > 1.5 ? [1, 2, 5] : [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const startExp = Math.floor(Math.log10(lo));
+    const endExp = Math.ceil(Math.log10(hi));
+    const ticks = [];
+    for (let exp = startExp; exp <= endExp; exp++) {
+      for (const m of multiples) {
+        const v = m * Math.pow(10, exp);
+        if (v >= lo && v <= hi) ticks.push(v);
+      }
+    }
+    return ticks;
   }
 
   const formatMillisecond = d3.timeFormat('.%L');
