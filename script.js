@@ -31,6 +31,17 @@
   let selection = null; // {start, end} data indices, sticky until a plain click clears it
   let hoverDate = null; // last hovered/pinch-anchored date, redrawn as the crosshair on every render
 
+  // Precise (sub-day) pan/zoom state in ms, kept separate from the date
+  // inputs' displayed value. The <input type="date"> fields only hold whole
+  // days, so if gesture math read its range back from them, every single
+  // touch/wheel step would round-trip through day granularity and discard
+  // its own progress — a slow or fine-grained gesture (touch produces many
+  // tiny steps) would look completely stuck until one step happened to
+  // cross a full day on its own. These stay precise and accumulate; the
+  // inputs (and the actual data filtering) are just a rounded view of them.
+  let viewStart = null;
+  let viewEnd = null;
+
   fileInput.addEventListener('change', (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -52,6 +63,8 @@
       endDateInput.max = toInputValue(maxDate);
       startDateInput.value = toInputValue(minDate);
       endDateInput.value = toInputValue(maxDate);
+      viewStart = minDate.getTime();
+      viewEnd = maxDate.getTime();
 
       useLog = true;
       logToggle.checked = true;
@@ -67,8 +80,17 @@
     if (data.length) render();
   });
 
-  startDateInput.addEventListener('change', applyDateFilter);
-  endDateInput.addEventListener('change', applyDateFilter);
+  // A manual edit of the date fields is itself day-precision, so it's a
+  // legitimate point to resync the precise pan/zoom state to match.
+  function onDateInputChange() {
+    const [dataMin, dataMax] = d3.extent(allData, (d) => d.date);
+    viewStart = (startDateInput.value ? parseFlexibleDate(startDateInput.value) : dataMin).getTime();
+    viewEnd = (endDateInput.value ? parseFlexibleDate(endDateInput.value) : dataMax).getTime();
+    applyDateFilter();
+  }
+
+  startDateInput.addEventListener('change', onDateInputChange);
+  endDateInput.addEventListener('change', onDateInputChange);
 
   window.addEventListener('resize', () => {
     if (data.length) render();
@@ -89,30 +111,84 @@
     if (!allData.length) return;
     if (event.ctrlKey) {
       event.preventDefault();
-      applyPinchZoom(event);
+      zoomByFactor(Math.exp(Math.max(-80, Math.min(80, event.deltaY)) * PINCH_SENSITIVITY), event.clientX);
     } else if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
       event.preventDefault();
       applyPan(event.deltaX);
     }
   }, { passive: false });
 
-  // Date under the cursor at the time of the gesture, so zooming keeps that
-  // point fixed on screen instead of always zooming toward the center.
-  function cursorDateMs(event, curStart, curEnd) {
+  // Two-finger touch gestures (iPadOS/mobile Safari): pinch distance drives
+  // zoom, the moving midpoint drives pan, combined in the same touchmove so
+  // a pinch-and-drag feels like one continuous gesture. Bound to chartCard
+  // (not the per-render overlay) because zooming/panning re-renders the SVG
+  // on every step, which would otherwise tear down the listener mid-gesture.
+  let touchGestureActive = false;
+  let touchPrevDistance = null;
+  let touchPrevMidX = null;
+
+  function touchDistance(t1, t2) {
+    return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+  }
+
+  function touchMidX(t1, t2) {
+    return (t1.clientX + t2.clientX) / 2;
+  }
+
+  function endTouchGesture() {
+    touchGestureActive = false;
+    touchPrevDistance = null;
+    touchPrevMidX = null;
+  }
+
+  chartCard.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 2 || !allData.length) return;
+    event.preventDefault();
+    touchGestureActive = true;
+    touchPrevDistance = touchDistance(event.touches[0], event.touches[1]);
+    touchPrevMidX = touchMidX(event.touches[0], event.touches[1]);
+  }, { passive: false });
+
+  chartCard.addEventListener('touchmove', (event) => {
+    if (!touchGestureActive || event.touches.length !== 2) return;
+    event.preventDefault();
+    const distance = touchDistance(event.touches[0], event.touches[1]);
+    const midX = touchMidX(event.touches[0], event.touches[1]);
+
+    // Fingers spreading apart (distance growing) narrows the range, mirroring
+    // the trackpad pinch-out = zoom in convention. Ratio-based, so it's
+    // naturally proportional to how far the fingers actually moved — no
+    // separate sensitivity constant needed like the per-tick wheel delta.
+    if (touchPrevDistance) {
+      zoomByFactor(Math.max(0.5, Math.min(2, touchPrevDistance / distance)), midX);
+    }
+    if (touchPrevMidX !== null) {
+      applyPan(touchPrevMidX - midX);
+    }
+
+    touchPrevDistance = distance;
+    touchPrevMidX = midX;
+  }, { passive: false });
+
+  chartCard.addEventListener('touchend', endTouchGesture);
+  chartCard.addEventListener('touchcancel', endTouchGesture);
+
+  // Date at a given screen x position at the time of the gesture, so zooming
+  // keeps that point fixed on screen instead of always zooming toward the
+  // center.
+  function cursorDateAtClientX(clientX, curStart, curEnd) {
     const rect = svg.node().getBoundingClientRect();
     if (!rect.width) return null;
     const innerLeft = rect.left + margin.left;
     const innerRight = rect.left + rect.width - margin.right;
     if (innerRight <= innerLeft) return null;
-    const fraction = (Math.min(Math.max(event.clientX, innerLeft), innerRight) - innerLeft) / (innerRight - innerLeft);
+    const fraction = (Math.min(Math.max(clientX, innerLeft), innerRight) - innerLeft) / (innerRight - innerLeft);
     return curStart + fraction * (curEnd - curStart);
   }
 
   function currentRange() {
     const [dataMin, dataMax] = d3.extent(allData, (d) => d.date);
-    const curStart = (startDateInput.value ? parseFlexibleDate(startDateInput.value) : dataMin).getTime();
-    const curEnd = (endDateInput.value ? parseFlexibleDate(endDateInput.value) : dataMax).getTime();
-    return { dataMin: dataMin.getTime(), dataMax: dataMax.getTime(), curStart, curEnd };
+    return { dataMin: dataMin.getTime(), dataMax: dataMax.getTime(), curStart: viewStart, curEnd: viewEnd };
   }
 
   // Slide the window rather than clamping each end independently, so
@@ -130,19 +206,16 @@
   }
 
   function setRange(start, end) {
+    viewStart = start;
+    viewEnd = end;
     startDateInput.value = toInputValue(new Date(start));
     endDateInput.value = toInputValue(new Date(end));
     applyDateFilter();
   }
 
-  function applyPinchZoom(event) {
-    // Clamp so one wild delta spike (some mice report huge steps) can't
-    // jump the range too far in a single event.
-    const clampedDelta = Math.max(-80, Math.min(80, event.deltaY));
-    const factor = Math.exp(clampedDelta * PINCH_SENSITIVITY);
-
+  function zoomByFactor(factor, clientX) {
     const { dataMin, dataMax, curStart, curEnd } = currentRange();
-    const anchor = cursorDateMs(event, curStart, curEnd) ?? (curStart + curEnd) / 2;
+    const anchor = cursorDateAtClientX(clientX, curStart, curEnd) ?? (curStart + curEnd) / 2;
     const anchorFraction = (anchor - curStart) / (curEnd - curStart);
 
     const fullRangeMs = dataMax - dataMin;
@@ -562,6 +635,55 @@
       focusCircle.style('opacity', 0);
       setReadoutDefault();
     });
+
+    // One-finger touch drag mirrors mouse click-and-drag range selection.
+    // Safe to key off render()'s local xScale/nearestIndex here (unlike the
+    // two-finger touch gestures above) because a plain drag never changes
+    // the date range mid-gesture, so this overlay instance stays alive for
+    // the whole drag instead of being torn down by a re-render.
+    function onWindowTouchMove(event) {
+      if (event.touches.length !== 1) return;
+      event.preventDefault();
+      const [tx] = d3.pointer(event.touches[0], overlayNode);
+      const idx = nearestIndex(clampX(tx));
+      dragMoved = dragMoved || idx !== dragStartIndex;
+      showSelection(dragStartIndex, idx);
+      focusLineV.style('opacity', 0);
+      focusLineH.style('opacity', 0);
+      focusCircle.style('opacity', 0);
+    }
+
+    function onWindowTouchEnd(event) {
+      window.removeEventListener('touchmove', onWindowTouchMove);
+      window.removeEventListener('touchend', onWindowTouchEnd);
+      window.removeEventListener('touchcancel', onWindowTouchEnd);
+      isDragging = false;
+      const touch = event.changedTouches[0];
+      const [tx] = d3.pointer(touch, overlayNode);
+      const endIndex = nearestIndex(clampX(tx));
+      if (!dragMoved || endIndex === dragStartIndex) {
+        selection = null;
+        hoverDate = null;
+        clearSelectionVisual();
+        setReadoutDefault();
+      } else {
+        selection = { start: Math.min(dragStartIndex, endIndex), end: Math.max(dragStartIndex, endIndex) };
+        showSelection(dragStartIndex, endIndex);
+      }
+    }
+
+    overlay.on('touchstart', (event) => {
+      if (event.touches.length !== 1) return; // let chartCard's two-finger handler take pinch/pan
+      event.preventDefault();
+      const [tx] = d3.pointer(event.touches[0], overlayNode);
+      dragStartIndex = nearestIndex(clampX(tx));
+      isDragging = true;
+      dragMoved = false;
+      hoverDate = null;
+      window.addEventListener('touchmove', onWindowTouchMove, { passive: false });
+      window.addEventListener('touchend', onWindowTouchEnd);
+      window.addEventListener('touchcancel', onWindowTouchEnd);
+    }, { passive: false });
 
     if (selection) {
       showSelection(selection.start, selection.end);
