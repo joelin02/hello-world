@@ -30,7 +30,10 @@
   const startDateInput = document.getElementById('start-date');
   const endDateInput = document.getElementById('end-date');
 
-  const margin = { top: 16, right: 20, bottom: 32, left: 92 };
+  // Reassigned at the top of every render() to reflect the current screen —
+  // module-level (not render()-local) because a couple of gesture-math
+  // functions outside render() (applyPan, cursorDateAtClientX) need it too.
+  let margin = { top: 16, right: 20, bottom: 32, left: 92 };
   const emptyStateDefaultText = emptyState.textContent;
   const toInputValue = d3.timeFormat('%Y-%m-%d');
 
@@ -58,13 +61,25 @@
   const CHART_CARD_CHROME = 26;
   const BREATHING_ROOM = 56;
 
+  function isPhoneScreen() {
+    return window.innerWidth < TABLET_BREAKPOINT;
+  }
+
   function computeChartHeight() {
     const viewportHeight = window.innerHeight;
-    if (window.innerWidth < TABLET_BREAKPOINT) {
+    if (isPhoneScreen()) {
       return Math.round(Math.max(PHONE_MIN_HEIGHT, Math.min(PHONE_MAX_HEIGHT, viewportHeight * 0.55)));
     }
     const overhead = READOUT_HEIGHT_ESTIMATE + CHART_CARD_CHROME + BREATHING_ROOM;
     return Math.round(Math.max(TABLET_MIN_HEIGHT, Math.min(TABLET_MAX_HEIGHT, viewportHeight - overhead)));
+  }
+
+  // Compact abbreviated labels ("100k", "1.5M") free up enough width that a
+  // narrower left margin is worth it on a phone-width screen — the full
+  // ",.2f" format ("100,000.00") needs the wider default margin to avoid
+  // clipping/crowding.
+  function computeMargin() {
+    return { top: 16, right: 20, bottom: 32, left: isPhoneScreen() ? 56 : 92 };
   }
 
   function updateEmptyStateHeight() {
@@ -445,6 +460,7 @@
   }
 
   function render() {
+    margin = computeMargin();
     const width = chartCard.clientWidth - 16;
     const height = computeChartHeight();
     const innerWidth = width - margin.left - margin.right;
@@ -476,32 +492,44 @@
     const tickCount = Math.max(2, Math.floor(innerWidth / 90));
     const g = svg.append('g');
 
+    // X-axis ticks, with a midpoint inserted wherever the gap between two
+    // adjacent ticks is wide enough to comfortably fit another label (e.g.
+    // halving a coarse "every 10 years" down to "every 5") without
+    // crowding — see fillLargeGaps.
+    const xTicks = fillLargeGaps(
+      xScale.ticks(tickCount),
+      (d) => xScale(d),
+      (a, b) => roundDateToGranularity(new Date((a.getTime() + b.getTime()) / 2), b.getTime() - a.getTime()),
+      130
+    );
+
     // Gridlines
     g.append('g')
       .attr('class', 'grid')
       .attr('transform', `translate(0,${height - margin.bottom})`)
-      .call(d3.axisBottom(xScale).ticks(tickCount).tickSize(-innerHeight).tickFormat(''));
+      .call(d3.axisBottom(xScale).tickValues(xTicks).tickSize(-innerHeight).tickFormat(''));
 
     // X axis (dates, spaced/skipped by d3 based on available width)
     g.append('g')
       .attr('class', 'axis x-axis')
       .attr('transform', `translate(0,${height - margin.bottom})`)
-      .call(d3.axisBottom(xScale).ticks(tickCount).tickFormat(multiFormat).tickSizeOuter(0));
+      .call(d3.axisBottom(xScale).tickValues(xTicks).tickFormat(multiFormat).tickSizeOuter(0));
 
     // Y axis (price, left-hand side like Google Finance). Tick count scales
     // with the available height (~1 per 45px) so a short/mobile chart gets
     // fewer, less-crowded labels instead of the same fixed count squeezed
-    // into less space — label font-size itself never shrinks, only density.
+    // into less space. A phone-width screen gets abbreviated labels ("100k",
+    // "1.5M" instead of "100,000.00") — label font-size itself is untouched
+    // (set in CSS, not scaled here), only the format and margin width
+    // change, matching the narrower computeMargin() on phones.
     const yTickCount = Math.max(3, Math.floor(innerHeight / 45));
-    const yAxis = d3.axisLeft(yScale).tickFormat(d3.format(',.2f')).tickSizeOuter(0);
-    if (useLog) {
-      // Plain d3 log ticks collapse to bare powers of ten once the domain
-      // spans multiple decades (e.g. 1M straight to 10M) — use finer,
-      // adaptively-spaced values instead so the axis reads smoothly.
-      yAxis.tickValues(logTickValues(yScale.domain(), yTickCount));
-    } else {
-      yAxis.ticks(yTickCount);
-    }
+    const yTickFormat = isPhoneScreen() ? d3.format('.3~s') : d3.format(',.2f');
+    // Plain d3 log ticks collapse to bare powers of ten once the domain
+    // spans multiple decades (e.g. 1M straight to 10M) — logTickValues uses
+    // finer, adaptively-spaced values instead so the axis reads smoothly.
+    const rawYTicks = useLog ? logTickValues(yScale.domain(), yTickCount) : yScale.ticks(yTickCount);
+    const yTicks = fillLargeGaps(rawYTicks, (d) => yScale(d), (a, b) => (a + b) / 2, 90);
+    const yAxis = d3.axisLeft(yScale).tickValues(yTicks).tickFormat(yTickFormat).tickSizeOuter(0);
     g.append('g')
       .attr('class', 'axis y-axis')
       .attr('transform', `translate(${margin.left},0)`)
@@ -929,6 +957,40 @@
       if (ticks.length <= maxTicks || tier === tiers.length - 1) return ticks;
     }
     return [];
+  }
+
+  // Inserts a midpoint tick wherever the ON-SCREEN gap between adjacent
+  // ticks exceeds maxPixelGap. Covers both an isolated large jump (e.g. an
+  // outlier gap in the log-scale Y-axis) and a uniformly coarse interval
+  // (e.g. every 10 years on the X-axis, which this halves to every 5) —
+  // without uniformly increasing density everywhere else, which would look
+  // cluttered. Adds at most one midpoint per gap regardless of how large,
+  // to keep it restrained. ticks must be sorted ascending.
+  function fillLargeGaps(ticks, scaleFn, midpointFn, maxPixelGap) {
+    if (ticks.length < 2) return ticks;
+    const result = [ticks[0]];
+    for (let i = 1; i < ticks.length; i++) {
+      const pixelGap = Math.abs(scaleFn(ticks[i]) - scaleFn(ticks[i - 1]));
+      if (pixelGap > maxPixelGap) result.push(midpointFn(ticks[i - 1], ticks[i]));
+      result.push(ticks[i]);
+    }
+    return result;
+  }
+
+  // Rounds a computed midpoint date to a clean boundary matching the
+  // granularity of the surrounding ticks (inferred from the gap between
+  // them), so an inserted tick reads as "1955" rather than "Jan 2, 1955" —
+  // the raw arithmetic mean of two Date timestamps doesn't land exactly on
+  // a nice boundary once leap years/DST are factored in.
+  function roundDateToGranularity(date, gapMs) {
+    const DAY = 86400000;
+    if (gapMs >= 300 * DAY) return d3.timeYear.round(date);
+    if (gapMs >= 20 * DAY) return d3.timeMonth.round(date);
+    if (gapMs >= 5 * DAY) return d3.timeWeek.round(date);
+    if (gapMs >= DAY) return d3.timeDay.round(date);
+    if (gapMs >= 3600000) return d3.timeHour.round(date);
+    if (gapMs >= 60000) return d3.timeMinute.round(date);
+    return d3.timeSecond.round(date);
   }
 
   const formatMillisecond = d3.timeFormat('.%L');
