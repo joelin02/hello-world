@@ -744,19 +744,26 @@
     // except a near-vertical swipe is treated as an ordinary page scroll
     // instead, so a one-finger flick still scrolls the page even when it
     // starts over the chart. Direction is decided once, after a small
-    // deadzone (to avoid jitter deciding it prematurely on a barely-moving
-    // touch), then locked for the rest of the gesture — matching how native
-    // scroll views disambiguate a pan direction. Safe to key off render()'s
-    // local xScale/nearestIndex here (unlike the two-finger touch gestures
-    // above) because a plain drag never changes the date range mid-gesture,
-    // so this overlay instance stays alive for the whole drag instead of
-    // being torn down by a re-render.
+    // deadzone, then locked for the rest of the gesture — matching how
+    // native scroll views disambiguate a pan direction. touchend always
+    // keeps its listener (never removed mid-gesture) and makes the final
+    // call from *total* movement since touchstart: a real tap's natural
+    // finger jitter can easily cross the deadzone and land within the
+    // vertical cone by chance, so without this a genuine tap could get
+    // misread as "started scrolling" and lose its chance to show the
+    // tapped point. A real scroll (large total movement) still leaves the
+    // readout alone. Safe to key off render()'s local xScale/nearestIndex
+    // here (unlike the two-finger touch gestures above) because a plain
+    // drag never changes the date range mid-gesture, so this overlay
+    // instance stays alive for the whole drag instead of being torn down
+    // by a re-render.
     const VERTICAL_SCROLL_MAX_ANGLE = 15; // degrees from true vertical — "almost perfectly vertical"
-    const DIRECTION_LOCK_DISTANCE = 8; // px of movement before committing to a direction
+    const TAP_DISTANCE_THRESHOLD = 20; // px — below this, total movement still counts as a tap regardless of direction
 
     let touchStartX = null;
     let touchStartY = null;
     let touchDirectionLocked = false;
+    let touchIsVerticalScroll = false;
 
     function onWindowTouchMove(event) {
       if (event.touches.length !== 1) return;
@@ -765,21 +772,22 @@
       if (!touchDirectionLocked) {
         const dx = touch.clientX - touchStartX;
         const dy = touch.clientY - touchStartY;
-        if (Math.hypot(dx, dy) < DIRECTION_LOCK_DISTANCE) return; // too little movement to tell yet
+        if (Math.hypot(dx, dy) < TAP_DISTANCE_THRESHOLD) return; // too little movement to tell yet
         touchDirectionLocked = true;
         const angleFromVertical = Math.atan2(Math.abs(dx), Math.abs(dy)) * (180 / Math.PI);
-        if (angleFromVertical <= VERTICAL_SCROLL_MAX_ANGLE) {
-          // Hand off to native scrolling: abandon the drag-select and stop
-          // intercepting the rest of this gesture. No preventDefault below
-          // this point is what actually lets the page scroll.
+        touchIsVerticalScroll = angleFromVertical <= VERTICAL_SCROLL_MAX_ANGLE;
+        if (touchIsVerticalScroll) {
+          // Hand off to native scrolling: abandon the drag-select. No
+          // preventDefault below this point is what actually lets the page
+          // scroll. Listeners stay attached (not removed) so touchend can
+          // still reconsider — see the comment above.
           isDragging = false;
           clearSelectionVisual();
-          window.removeEventListener('touchmove', onWindowTouchMove);
-          window.removeEventListener('touchend', onWindowTouchEnd);
-          window.removeEventListener('touchcancel', onWindowTouchEnd);
           return;
         }
       }
+
+      if (touchIsVerticalScroll) return; // native scroll owns this gesture now
 
       event.preventDefault();
       const [tx] = d3.pointer(touch, overlayNode);
@@ -797,17 +805,26 @@
       window.removeEventListener('touchcancel', onWindowTouchEnd);
       isDragging = false;
       const touch = event.changedTouches[0];
+      const totalDistance = Math.hypot(touch.clientX - touchStartX, touch.clientY - touchStartY);
       const [tx] = d3.pointer(touch, overlayNode);
       const endIndex = nearestIndex(clampX(tx));
-      if (!dragMoved || endIndex === dragStartIndex) {
-        // A plain tap, not a drag — touch has no separate hover mechanism
-        // like desktop's mousemove, so this is the only way to inspect a
-        // specific point's value. Show it instead of resetting to default.
+
+      if (totalDistance < TAP_DISTANCE_THRESHOLD) {
+        // Barely moved overall, regardless of any brief direction-lock —
+        // touch has no separate hover mechanism like desktop's mousemove,
+        // so a tap is the only way to inspect a specific point's value.
         selection = null;
         const tapped = data[endIndex];
         hoverDate = tapped.date;
         clearSelectionVisual();
         showHoverPoint(tapped);
+      } else if (touchIsVerticalScroll) {
+        // Genuinely scrolled the page — leave the readout as it was.
+      } else if (!dragMoved || endIndex === dragStartIndex) {
+        selection = null;
+        hoverDate = null;
+        clearSelectionVisual();
+        setReadoutDefault();
       } else {
         selection = { start: Math.min(dragStartIndex, endIndex), end: Math.max(dragStartIndex, endIndex) };
         showSelection(dragStartIndex, endIndex);
@@ -820,6 +837,7 @@
       touchStartX = touch.clientX;
       touchStartY = touch.clientY;
       touchDirectionLocked = false;
+      touchIsVerticalScroll = false;
       const [tx] = d3.pointer(touch, overlayNode);
       dragStartIndex = nearestIndex(clampX(tx));
       isDragging = true;
