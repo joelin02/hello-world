@@ -91,6 +91,15 @@
   let useLog = false;
   let selection = null; // {start, end} data indices, sticky until a plain click clears it
   let hoverDate = null; // last hovered/pinch-anchored date, redrawn as the crosshair on every render
+  // true when hoverDate is a gesture anchor (draw the crosshair at its exact
+  // position, price linearly interpolated) rather than an actual tapped/
+  // hovered data point (snap to the nearest real one). Without this, a
+  // pinch/pan step re-snaps to whichever data point is nearest the anchor
+  // on every single frame — since the anchor comes from live cursor/finger
+  // coordinates and the zoom range itself is also shifting every frame, the
+  // "nearest point" can flip between two adjacent ones, showing up as a
+  // small jiggle even when your fingers barely moved.
+  let hoverIsInterpolated = false;
 
   // Precise (sub-day) pan/zoom state in ms, kept separate from the date
   // inputs' displayed value. The <input type="date"> fields only hold whole
@@ -179,9 +188,11 @@
     if (event.ctrlKey) {
       event.preventDefault();
       zoomByFactor(Math.exp(Math.max(-80, Math.min(80, event.deltaY)) * PINCH_SENSITIVITY), event.clientX);
+      pinHoverAnchor(event.clientX);
     } else if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
       event.preventDefault();
       applyPan(event.deltaX);
+      pinHoverAnchor(event.clientX);
     }
   }, { passive: false });
 
@@ -242,6 +253,7 @@
     if (touchPrevMidX !== null) {
       applyPan(touchPrevMidX - midX);
     }
+    pinHoverAnchor(midX);
 
     touchPrevDistance = distance;
     touchPrevMidX = midX;
@@ -363,10 +375,6 @@
     const newStart = anchor - anchorFraction * newRangeMs;
     const newEnd = newStart + newRangeMs;
 
-    // Pin the crosshair to the anchor date so it stays visible through the
-    // re-render instead of only reappearing on the next real mousemove.
-    hoverDate = new Date(anchor);
-
     const clamped = clampRange(newStart, newEnd, dataMin, dataMax);
     setRange(clamped.start, clamped.end);
   }
@@ -382,6 +390,21 @@
     const shiftMs = deltaX * ((curEnd - curStart) / innerWidth);
     const clamped = clampRange(curStart + shiftMs, curEnd + shiftMs, dataMin, dataMax);
     setRange(clamped.start, clamped.end);
+  }
+
+  // Pins the crosshair to whatever date now sits under clientX, after a
+  // gesture step's range change(s) — called once per frame by the callers
+  // below, using the frame's actual cursor/pinch-center position, rather
+  // than each of zoomByFactor/applyPan independently touching hoverDate
+  // (which, combined per-frame, could compute it from a stale intermediate
+  // range). hoverIsInterpolated tells render() to draw it at this exact
+  // position instead of snapping to the nearest real data point.
+  function pinHoverAnchor(clientX) {
+    const { curStart, curEnd } = currentRange();
+    const anchor = cursorDateAtClientX(clientX, curStart, curEnd);
+    if (anchor === null) return;
+    hoverDate = new Date(anchor);
+    hoverIsInterpolated = true;
   }
 
   function applyDateFilter() {
@@ -471,8 +494,22 @@
     // Only the rebuildable content — not the persistent overlay (see top).
     svg.selectAll('g, defs').remove();
 
+    // Domain is the precise selected range (viewStart/viewEnd), not
+    // d3.extent(data, ...) (the first/last *filtered data point's* dates,
+    // which jump discretely as points enter/exit the window during a
+    // gesture — unrelated to how smoothly the gesture itself progresses)
+    // and not the day-rounded date input values either (many consecutive
+    // fine-gesture steps can round to the same day, freezing the domain
+    // for several frames and then jumping — a stepping artifact rather
+    // than smooth movement). viewStart/viewEnd update every gesture frame
+    // at full precision, so every pixel position computed from the
+    // domain — including the crosshair — tracks continuously. Falls back
+    // to the data's own extent only if viewStart/viewEnd are unset (should
+    // not happen once a file's loaded, but just in case).
+    const domainStart = viewStart !== null ? new Date(viewStart) : data[0].date;
+    const domainEnd = viewEnd !== null ? new Date(viewEnd) : data[data.length - 1].date;
     const xScale = d3.scaleTime()
-      .domain(d3.extent(data, (d) => d.date))
+      .domain([domainStart, domainEnd])
       .range([margin.left, width - margin.right]);
 
     // Log scale skips .nice() on purpose: nice() rounds a log domain outward
@@ -646,6 +683,21 @@
       return (x0 - d0.date > d1.date - x0) ? i : i - 1;
     }
 
+    // Linearly interpolates price between the two real data points
+    // bracketing `date`, keeping `date` itself exact — used for the gesture-
+    // anchored crosshair so it tracks the cursor/pinch-center continuously
+    // instead of jumping between real data points as the anchor and zoom
+    // range both shift slightly every frame.
+    function interpolatedPointAt(date) {
+      const i = bisectDate(data, date, 1);
+      const d0 = data[i - 1];
+      const d1 = data[i];
+      if (!d0) return d1 ? { date, price: d1.price } : null;
+      if (!d1) return { date, price: d0.price };
+      const t = (date - d0.date) / (d1.date - d0.date);
+      return { date, price: d0.price + t * (d1.price - d0.price) };
+    }
+
     function clearSelectionVisual() {
       selectionRegion.style('display', 'none');
       selectionLineStart.style('display', 'none');
@@ -787,6 +839,7 @@
       const d = data[nearestIndex(clampX(mx))];
       if (!d) return;
       hoverDate = d.date;
+      hoverIsInterpolated = false;
       showHoverPoint(d);
     });
 
@@ -886,6 +939,7 @@
         selection = null;
         const tapped = data[endIndex];
         hoverDate = tapped.date;
+        hoverIsInterpolated = false;
         clearSelectionVisual();
         showHoverPoint(tapped);
       } else if (touchIsVerticalScroll) {
@@ -922,8 +976,15 @@
       showSelection(selection.start, selection.end);
     } else if (hoverDate) {
       // Redraws the crosshair immediately on render (e.g. after a pinch-zoom
-      // step) instead of waiting for the next real mousemove.
-      showHoverPoint(data[nearestIndex(clampX(xScale(hoverDate)))]);
+      // step) instead of waiting for the next real mousemove. A gesture
+      // anchor uses the exact interpolated position (see hoverIsInterpolated
+      // above); an actual tapped/hovered point snaps to the real data point
+      // as before.
+      const point = hoverIsInterpolated
+        ? interpolatedPointAt(hoverDate)
+        : data[nearestIndex(clampX(xScale(hoverDate)))];
+      if (point) showHoverPoint(point);
+      else setReadoutDefault();
     } else {
       setReadoutDefault();
     }
