@@ -123,9 +123,19 @@
   // a pinch-and-drag feels like one continuous gesture. Bound to chartCard
   // (not the per-render overlay) because zooming/panning re-renders the SVG
   // on every step, which would otherwise tear down the listener mid-gesture.
+  // iOS delivers touchmove events faster than a full chart re-render can
+  // keep up with, so applying every single event synchronously backs up the
+  // main thread and looks laggy/jumpy instead of continuous. Touchmove only
+  // records the latest finger positions; the actual zoom+pan+render is
+  // batched to once per animation frame, always using the most recent
+  // positions by the time the frame runs. Safe to rely on rAF here (unlike
+  // the wheel handler) since a touch gesture only happens while the tab is
+  // focused and visible.
   let touchGestureActive = false;
   let touchPrevDistance = null;
   let touchPrevMidX = null;
+  let touchLatest = null;
+  let touchFrameQueued = false;
 
   function touchDistance(t1, t2) {
     return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -139,21 +149,14 @@
     touchGestureActive = false;
     touchPrevDistance = null;
     touchPrevMidX = null;
+    touchLatest = null;
   }
 
-  chartCard.addEventListener('touchstart', (event) => {
-    if (event.touches.length !== 2 || !allData.length) return;
-    event.preventDefault();
-    touchGestureActive = true;
-    touchPrevDistance = touchDistance(event.touches[0], event.touches[1]);
-    touchPrevMidX = touchMidX(event.touches[0], event.touches[1]);
-  }, { passive: false });
-
-  chartCard.addEventListener('touchmove', (event) => {
-    if (!touchGestureActive || event.touches.length !== 2) return;
-    event.preventDefault();
-    const distance = touchDistance(event.touches[0], event.touches[1]);
-    const midX = touchMidX(event.touches[0], event.touches[1]);
+  function processTouchFrame() {
+    touchFrameQueued = false;
+    if (!touchGestureActive || !touchLatest) return;
+    const distance = touchDistance(touchLatest[0], touchLatest[1]);
+    const midX = touchMidX(touchLatest[0], touchLatest[1]);
 
     // Fingers spreading apart (distance growing) narrows the range, mirroring
     // the trackpad pinch-out = zoom in convention. Ratio-based, so it's
@@ -168,6 +171,23 @@
 
     touchPrevDistance = distance;
     touchPrevMidX = midX;
+  }
+
+  chartCard.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 2 || !allData.length) return;
+    event.preventDefault();
+    touchGestureActive = true;
+    touchPrevDistance = touchDistance(event.touches[0], event.touches[1]);
+    touchPrevMidX = touchMidX(event.touches[0], event.touches[1]);
+  }, { passive: false });
+
+  chartCard.addEventListener('touchmove', (event) => {
+    if (!touchGestureActive || event.touches.length !== 2) return;
+    event.preventDefault();
+    touchLatest = [event.touches[0], event.touches[1]];
+    if (touchFrameQueued) return;
+    touchFrameQueued = true;
+    requestAnimationFrame(processTouchFrame);
   }, { passive: false });
 
   chartCard.addEventListener('touchend', endTouchGesture);
