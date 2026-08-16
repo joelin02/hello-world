@@ -637,23 +637,29 @@
       readoutPrice.textContent = formatPrice(endD.price);
       readoutChange.textContent = `${up ? '▲' : '▼'} ${formatSignedPrice(delta)} (${formatSignedPct(pct)})`;
       readoutChange.className = `readout-change ${up ? 'up' : 'down'}`;
+      readoutCagr.classList.remove('hidden');
       readoutCagr.textContent = formatCagr(calculateCagr(startD, endD));
       readoutDate.textContent = `${formatFullDate(startD.date)} – ${formatFullDate(endD.date)}`;
     }
 
-    function setReadoutForPoint(d) {
+    // showCagr is false for a plain single-point hover/tap — CAGR only
+    // makes sense as a comparison between two dates, so it's hidden there
+    // and only shown for setReadoutDefault (the whole visible range,
+    // first-to-last) and setReadoutForRange (an explicit drag selection).
+    function setReadoutForPoint(d, showCagr) {
       const delta = d.price - first.price;
       const pct = (delta / first.price) * 100;
       const up = delta >= 0;
       readoutPrice.textContent = formatPrice(d.price);
       readoutChange.textContent = `${up ? '▲' : '▼'} ${formatSignedPrice(delta)} (${formatSignedPct(pct)})`;
       readoutChange.className = `readout-change ${up ? 'up' : 'down'}`;
-      readoutCagr.textContent = formatCagr(calculateCagr(first, d));
+      readoutCagr.classList.toggle('hidden', !showCagr);
+      if (showCagr) readoutCagr.textContent = formatCagr(calculateCagr(first, d));
       readoutDate.textContent = formatFullDate(d.date);
     }
 
     function setReadoutDefault() {
-      setReadoutForPoint(last);
+      setReadoutForPoint(last, true);
       readoutDate.textContent = `${formatFullDate(first.date)} – ${formatFullDate(last.date)}`;
     }
 
@@ -702,7 +708,7 @@
       focusLineV.attr('x1', xScale(d.date)).attr('x2', xScale(d.date)).style('opacity', 1);
       focusLineH.attr('y1', yScale(d.price)).attr('y2', yScale(d.price)).style('opacity', 1);
       focusCircle.attr('cx', xScale(d.date)).attr('cy', yScale(d.price)).attr('fill', trendColor).style('opacity', 1);
-      setReadoutForPoint(d);
+      setReadoutForPoint(d, false);
     }
 
     overlay.on('mousedown', (event) => {
@@ -794,10 +800,14 @@
       const [tx] = d3.pointer(touch, overlayNode);
       const endIndex = nearestIndex(clampX(tx));
       if (!dragMoved || endIndex === dragStartIndex) {
+        // A plain tap, not a drag — touch has no separate hover mechanism
+        // like desktop's mousemove, so this is the only way to inspect a
+        // specific point's value. Show it instead of resetting to default.
         selection = null;
-        hoverDate = null;
+        const tapped = data[endIndex];
+        hoverDate = tapped.date;
         clearSelectionVisual();
-        setReadoutDefault();
+        showHoverPoint(tapped);
       } else {
         selection = { start: Math.min(dragStartIndex, endIndex), end: Math.max(dragStartIndex, endIndex) };
         showSelection(dragStartIndex, endIndex);
