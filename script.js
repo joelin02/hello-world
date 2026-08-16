@@ -264,6 +264,37 @@
   chartCard.addEventListener('gesturechange', (event) => event.preventDefault(), { passive: false });
   chartCard.addEventListener('gestureend', (event) => event.preventDefault(), { passive: false });
 
+  // Belt-and-suspenders for an external trackpad (e.g. Magic Trackpad) on
+  // iPadOS: a trackpad pinch is cursor-driven rather than finger-on-glass,
+  // and reportedly still zooms the whole page even with the chartCard-level
+  // prevention above in place — possibly because its gesture events don't
+  // bubble/target the same way a touchscreen pinch's do. Registering the
+  // same prevention on document as well, gated on the event's target
+  // actually being within the chart, is a pure safety net: harmless if the
+  // chartCard listener already caught it, and catches it if not.
+  function preventGestureOverChart(event) {
+    if (chartCard.contains(event.target)) event.preventDefault();
+  }
+  document.addEventListener('gesturestart', preventGestureOverChart, { passive: false });
+  document.addEventListener('gesturechange', preventGestureOverChart, { passive: false });
+  document.addEventListener('gestureend', preventGestureOverChart, { passive: false });
+
+  // Touch has no hover/mouseleave to fall back to (unlike desktop, where
+  // moving the mouse off the chart already resets it), so a tap anywhere
+  // outside the chart card is the equivalent "deselect" gesture: clears any
+  // pinned crosshair or drag selection and shows the whole-range default
+  // view again. Guarded to single-touch so it doesn't fire on the first
+  // finger of a two-finger pinch/pan (which briefly has touches.length===1
+  // before the second finger lands, even when both are over the chart).
+  document.addEventListener('touchstart', (event) => {
+    if (!allData.length || event.touches.length !== 1) return;
+    if (chartCard.contains(event.target)) return;
+    if (!hoverDate && !selection) return;
+    selection = null;
+    hoverDate = null;
+    render();
+  });
+
   // Date at a given screen x position at the time of the gesture, so zooming
   // keeps that point fixed on screen instead of always zooming toward the
   // center.

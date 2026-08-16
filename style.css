@@ -166,6 +166,13 @@ body {
      horizontal swipe here as a back/forward navigation gesture. */
   overflow: hidden;
   overscroll-behavior-x: none;
+  /* pan-y (not auto) so pinch-zoom is disallowed across the whole card, not
+     just the narrow plot-area overlay inside it — a trackpad-driven pinch
+     on iPadOS is cursor-positioned rather than finger-on-glass, and might
+     land in the axis-label margins rather than precisely on the overlay.
+     Vertical panning stays allowed, so a one-finger flick over the margins
+     still scrolls the page normally. */
+  touch-action: pan-y;
 }
 
 .chart-empty {
