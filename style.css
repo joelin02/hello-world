@@ -161,6 +161,11 @@ body {
   background: var(--surface);
   padding: 16px 8px 8px;
   position: relative;
+  /* overflow: hidden makes this a scroll container so overscroll-behavior
+     actually applies — otherwise Chrome ignores it and still treats a
+     horizontal swipe here as a back/forward navigation gesture. */
+  overflow: hidden;
+  overscroll-behavior-x: none;
 }
 
 .chart-empty {
