@@ -803,6 +803,17 @@
       window.removeEventListener('touchmove', onWindowTouchMove);
       window.removeEventListener('touchend', onWindowTouchEnd);
       window.removeEventListener('touchcancel', onWindowTouchEnd);
+      // Safari synthesizes compatibility mouse events (mousedown/mouseup/
+      // click) after a touch sequence that never had preventDefault called —
+      // which a clean tap never did on its own, since it stays inside
+      // onWindowTouchMove's deadzone the whole time. Those synthesized
+      // events would then hit our own mousedown/mouseup handlers, and a
+      // "zero-movement click" there calls setReadoutDefault() — silently
+      // overwriting the point just shown below. preventDefault here (the
+      // classic fix for this, scoped to touchend specifically) suppresses
+      // that synthesis without affecting touchmove's independent decision
+      // about whether to let the page scroll.
+      if (event.cancelable) event.preventDefault();
       isDragging = false;
       const touch = event.changedTouches[0];
       const totalDistance = Math.hypot(touch.clientX - touchStartX, touch.clientY - touchStartY);
